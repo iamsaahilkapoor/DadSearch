@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/saahilironbond/DadSearch/releases/latest"><img src="https://img.shields.io/badge/Download-macOS%20DMG-blue?style=for-the-badge&logo=apple" alt="Download macOS DMG"></a>
+  <a href="https://github.com/iamsaahilkapoor/DadSearch/releases/latest"><img src="https://img.shields.io/badge/Download-macOS%20DMG-blue?style=for-the-badge&logo=apple" alt="Download macOS DMG"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License"></a>
   <img src="https://img.shields.io/badge/Swift-6.0-orange?style=for-the-badge&logo=swift" alt="Swift 6.0">
   <img src="https://img.shields.io/badge/macOS-14.0%2B-lightgrey?style=for-the-badge&logo=apple" alt="macOS 14.0+">
@@ -62,7 +62,7 @@ Finder and Spotlight are powerful, but for many non-tech or older users (includi
 
 ## 📥 Installation
 
-1. Go to the [**Releases**](https://github.com/saahilironbond/DadSearch/releases) page and download `DadSearch.dmg`.
+1. Go to the [**Releases**](https://github.com/iamsaahilkapoor/DadSearch/releases) page and download `DadSearch.dmg`.
 2. Open the `.dmg` file and drag **DadSearch** into your **Applications** folder.
 3. **First launch note (macOS Gatekeeper):** Because DadSearch is open-source and distributed outside the Mac App Store:
    - **Method A:** Right-click `DadSearch.app` in your Applications folder, choose **Open**, and click **Open** on the confirmation prompt.
@@ -79,7 +79,7 @@ Finder and Spotlight are powerful, but for many non-tech or older users (includi
 ### Build & Run
 ```bash
 # Clone the repository
-git clone https://github.com/saahilironbond/DadSearch.git
+git clone https://github.com/iamsaahilkapoor/DadSearch.git
 cd DadSearch
 
 # Run unit tests
