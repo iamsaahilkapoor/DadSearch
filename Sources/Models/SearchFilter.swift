@@ -5,8 +5,10 @@ public enum SearchCategoryFilter: String, CaseIterable, Identifiable, Sendable {
     case downloads = "Downloads"
     case screenshots = "📸 Screenshots"
     case chatAttachments = "💬 Chat & Attachments"
-    case emails = "Outlook Emails"
+    case emails = "Emails (Outlook & Mail)"
     case documents = "PDF & Docs"
+    case apps = "📱 Apps"
+    case contacts = "👤 Contacts & Events"
     case recent = "Recent (7 Days)"
 
     public var id: String { rawValue }
@@ -19,6 +21,8 @@ public enum SearchCategoryFilter: String, CaseIterable, Identifiable, Sendable {
         case .chatAttachments: return "bubble.left.and.bubble.right"
         case .emails: return "envelope"
         case .documents: return "doc.text"
+        case .apps: return "app.fill"
+        case .contacts: return "person.crop.circle"
         case .recent: return "clock.arrow.circlepath"
         }
     }

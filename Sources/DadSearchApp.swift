@@ -14,10 +14,10 @@ struct DadSearchMainApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandMenu("Search") {
-                Button("Show Floating Search Bar") {
+                Button("Show Floating Search Bar (⌥ Space)") {
                     AppPresentationManager.shared.toggleFloatingPanel()
                 }
-                .keyboardShortcut("f", modifiers: [.command, .option])
+                .keyboardShortcut(" ", modifiers: [.option])
 
                 Button("Show Main Window") {
                     AppPresentationManager.shared.showMainWindow()
@@ -36,14 +36,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         AppPresentationManager.shared.setup()
 
-        // Register global key monitor for Option+Space or Option+F
-        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            // Option + Space
-            if event.modifierFlags.contains(.option) && event.keyCode == 49 {
+        // Register system-wide Global Carbon HotKey (⌥ + Space)
+        GlobalHotkeyManager.shared.registerDefaultHotkey {
+            Task { @MainActor in
                 AppPresentationManager.shared.toggleFloatingPanel()
-                return nil
             }
-            return event
         }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        GlobalHotkeyManager.shared.unregisterHotkey()
     }
 }

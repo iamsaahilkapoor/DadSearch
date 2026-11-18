@@ -4,6 +4,7 @@ import CoreServices
 public final class SpotlightSearchEngine: @unchecked Sendable {
     public static let shared = SpotlightSearchEngine()
 
+    private let queue = DispatchQueue(label: "com.saahil.DadSearch.spotlightQueue")
     private var metadataQuery: NSMetadataQuery?
     private var completionHandler: (([SearchItem]) -> Void)?
 
@@ -30,11 +31,11 @@ public final class SpotlightSearchEngine: @unchecked Sendable {
                 let escapedTerm = term.replacingOccurrences(of: "\"", with: "\\\"")
                 let namePredicate = NSPredicate(format: "%K LIKE[cd] %@", kMDItemDisplayName as String, "*\(escapedTerm)*")
                 let contentPredicate = NSPredicate(format: "%K LIKE[cd] %@", kMDItemTextContent as String, "*\(escapedTerm)*")
-                let emailSubjectPredicate = NSPredicate(format: "%K LIKE[cd] %@", "kMDItemTitle", "*\(escapedTerm)*")
+                let titlePredicate = NSPredicate(format: "%K LIKE[cd] %@", "kMDItemTitle", "*\(escapedTerm)*")
                 let authorPredicate = NSPredicate(format: "%K LIKE[cd] %@", kMDItemAuthors as String, "*\(escapedTerm)*")
 
                 let combinedOr = NSCompoundPredicate(orPredicateWithSubpredicates: [
-                    namePredicate, contentPredicate, emailSubjectPredicate, authorPredicate
+                    namePredicate, contentPredicate, titlePredicate, authorPredicate
                 ])
                 subpredicates.append(combinedOr)
             }
@@ -70,33 +71,49 @@ public final class SpotlightSearchEngine: @unchecked Sendable {
             // 4. Category filtering
             switch category {
             case .emails:
+                // Include both Microsoft Outlook and Apple Mail (.emlx)
                 let emailPred = NSPredicate(
-                    format: "%K ==[cd] %@ OR %K LIKE[cd] %@ OR %K LIKE[cd] %@",
+                    format: "%K ==[cd] %@ OR %K ==[cd] %@ OR %K LIKE[cd] %@ OR %K LIKE[cd] %@",
                     kMDItemContentType as String, "com.microsoft.outlook16.email-message",
+                    kMDItemContentType as String, "com.apple.mail.emlx",
                     kMDItemFSName as String, "*.eml",
                     kMDItemFSName as String, "*.olk15Message"
                 )
                 subpredicates.append(emailPred)
+
             case .documents:
                 let docPred = NSPredicate(
-                    format: "%K LIKE[cd] %@ OR %K LIKE[cd] %@ OR %K LIKE[cd] %@ OR %K LIKE[cd] %@",
+                    format: "%K LIKE[cd] %@ OR %K LIKE[cd] %@ OR %K LIKE[cd] %@ OR %K LIKE[cd] %@ OR %K LIKE[cd] %@",
                     kMDItemFSName as String, "*.pdf",
                     kMDItemFSName as String, "*.docx",
                     kMDItemFSName as String, "*.doc",
-                    kMDItemFSName as String, "*.xlsx"
+                    kMDItemFSName as String, "*.xlsx",
+                    kMDItemFSName as String, "*.pages"
                 )
                 subpredicates.append(docPred)
+
             case .downloads:
-                // Scoped search in Downloads
                 if let dlURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first {
                     query.searchScopes = [dlURL]
                 }
+
+            case .apps:
+                query.searchScopes = [
+                    URL(fileURLWithPath: "/Applications"),
+                    URL(fileURLWithPath: "/System/Applications"),
+                    URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Applications")
+                ]
+                let appPred = NSPredicate(format: "%K LIKE[cd] %@", kMDItemFSName as String, "*.app")
+                subpredicates.append(appPred)
+
+            case .contacts:
+                break
+
             case .all, .recent, .screenshots, .chatAttachments:
                 break
             }
 
             if subpredicates.isEmpty {
-                // Return default non-empty fallback query (everything recent in user home)
                 query.searchScopes = [NSMetadataQueryUserHomeScope]
                 let recentDays = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
                 query.predicate = NSPredicate(format: "%K >= %@", kMDItemContentModificationDate as String, recentDays as NSDate)
@@ -176,9 +193,17 @@ public final class SpotlightSearchEngine: @unchecked Sendable {
                 fileURL = URL(fileURLWithPath: path)
             }
 
-            let isOutlook = contentType.contains("outlook") || (path?.contains("Outlook") == true) || (path?.hasSuffix(".eml") == true)
+            let isOutlook = contentType.contains("outlook") || (path?.contains("Outlook") == true) || (path?.hasSuffix(".olk15Message") == true)
+            let isAppleMail = contentType.contains("mail.emlx") || (path?.hasSuffix(".emlx") == true)
+            let isApp = contentType.contains("application") || (path?.hasSuffix(".app") == true)
+            let isNote = contentType.contains("notes.note")
+
             let kind: SearchItemKind
-            if isOutlook {
+            if isApp {
+                kind = .application
+            } else if isNote {
+                kind = .note
+            } else if isOutlook || isAppleMail {
                 kind = .email
             } else if let path = path, path.contains("/Downloads/") {
                 kind = .download
@@ -191,8 +216,14 @@ public final class SpotlightSearchEngine: @unchecked Sendable {
             }
 
             let subtitle: String
-            if isOutlook {
+            if isApp {
+                subtitle = "Application • " + (path ?? "/Applications")
+            } else if isOutlook {
                 subtitle = "Outlook Message" + (author != nil ? " • From: \(author!)" : "")
+            } else if isAppleMail {
+                subtitle = "Apple Mail" + (author != nil ? " • From: \(author!)" : "")
+            } else if isNote {
+                subtitle = "Apple Notes"
             } else if let path = path {
                 subtitle = (path as NSString).abbreviatingWithTildeInPath
             } else {
@@ -215,7 +246,7 @@ public final class SpotlightSearchEngine: @unchecked Sendable {
             items.append(item)
         }
 
-        // Sort: newest first
+        // Sort: newest first initially
         items.sort { $0.modificationDate > $1.modificationDate }
 
         let handler = completionHandler

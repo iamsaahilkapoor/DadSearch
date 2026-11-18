@@ -10,6 +10,7 @@ public final class SearchViewModel: ObservableObject {
     @Published public var selectedItem: SearchItem?
     @Published public var isSearching: Bool = false
     @Published public var parsedQuery: ParsedQuery = ParsedQuery(rawQuery: "", cleanedTerms: [])
+    @Published public var recentQueries: [String] = []
 
     private var cancellables = Set<AnyCancellable>()
     private let queryParser = QueryParser.shared
@@ -18,10 +19,20 @@ public final class SearchViewModel: ObservableObject {
     private let chatAttachmentsIndexer = ChatAttachmentsIndexer.shared
     private let spotlightEngine = SpotlightSearchEngine.shared
     private let outlookEngine = OutlookSearchEngine.shared
+    private let appLauncher = AppLauncherEngine.shared
+    private let contactsEngine = ContactsSearchEngine.shared
+    private let calendarEngine = CalendarSearchEngine.shared
+    private let rankingEngine = RelevanceRankingEngine.shared
+    private let historyStore = SearchHistoryStore.shared
 
     public init() {
         setupBindings()
+        refreshHistory()
         loadInitialRecents()
+    }
+
+    public func refreshHistory() {
+        self.recentQueries = historyStore.getRecentQueries(limit: 6)
     }
 
     private func setupBindings() {
@@ -44,9 +55,11 @@ public final class SearchViewModel: ObservableObject {
 
     public func loadInitialRecents() {
         isSearching = true
-        let recentDownloads = downloadsTracker.fetchRecentDownloads(limit: 25)
+        let recentDownloads = downloadsTracker.fetchRecentDownloads(limit: 20)
         let recentScreenshots = screenshotsTracker.fetchRecentScreenshots(limit: 15)
-        let merged = (recentDownloads + recentScreenshots).sorted {
+        let recentApps = appLauncher.fetchApplications(limit: 10)
+
+        let merged = (recentDownloads + recentScreenshots + recentApps).sorted {
             ($0.addedDate ?? $0.modificationDate) > ($1.addedDate ?? $1.modificationDate)
         }
         self.results = merged
@@ -59,7 +72,7 @@ public final class SearchViewModel: ObservableObject {
         self.parsedQuery = parsed
         let category = forcedCategory ?? parsed.inferredCategory ?? self.selectedCategory
 
-        // 1. If query is empty and category is all, load initial recents
+        // If query is empty and category is all, load initial recents
         if parsed.rawQuery.isEmpty && category == .all {
             loadInitialRecents()
             return
@@ -67,28 +80,59 @@ public final class SearchViewModel: ObservableObject {
 
         self.isSearching = true
 
-        // Fast path for Screenshots chip or token
+        // Record history for substantive queries
+        if !parsed.searchTerm.isEmpty {
+            historyStore.recordQuery(query)
+            refreshHistory()
+        }
+
+        // Fast path 1: Apps only
+        if category == .apps {
+            let apps = appLauncher.fetchApplications(keyword: parsed.searchTerm, limit: 40)
+            let ranked = rankingEngine.rank(items: apps, parsedQuery: parsed, targetCategory: category)
+            self.results = ranked
+            self.selectedItem = ranked.first
+            self.isSearching = false
+            return
+        }
+
+        // Fast path 2: Screenshots chip
         if category == .screenshots {
             let shots = screenshotsTracker.fetchRecentScreenshots(limit: 50, keyword: parsed.searchTerm)
-            self.results = shots
-            self.selectedItem = shots.first
+            let ranked = rankingEngine.rank(items: shots, parsedQuery: parsed, targetCategory: category)
+            self.results = ranked
+            self.selectedItem = ranked.first
             self.isSearching = false
             return
         }
 
-        // Fast path for Chat & Attachments chip or token
+        // Fast path 3: Chat & Attachments chip
         if category == .chatAttachments {
             let chatFiles = chatAttachmentsIndexer.fetchRecentChatAttachments(limit: 50, keyword: parsed.searchTerm)
-            self.results = chatFiles
-            self.selectedItem = chatFiles.first
+            let ranked = rankingEngine.rank(items: chatFiles, parsedQuery: parsed, targetCategory: category)
+            self.results = ranked
+            self.selectedItem = ranked.first
             self.isSearching = false
             return
         }
 
-        // Fast path for Downloads
+        // Fast path 4: Contacts & Calendar
+        if category == .contacts {
+            let contacts = contactsEngine.searchContacts(keyword: parsed.searchTerm, limit: 15)
+            let events = calendarEngine.searchEvents(keyword: parsed.searchTerm, limit: 15)
+            let merged = contacts + events
+            let ranked = rankingEngine.rank(items: merged, parsedQuery: parsed, targetCategory: category)
+            self.results = ranked
+            self.selectedItem = ranked.first
+            self.isSearching = false
+            return
+        }
+
+        // Synchronous immediate results gather
         var immediateResults: [SearchItem] = []
+
         if category == .all || category == .downloads {
-            let downloads = downloadsTracker.fetchRecentDownloads(limit: 50)
+            let downloads = downloadsTracker.fetchRecentDownloads(limit: 40)
             if !parsed.searchTerm.isEmpty {
                 let lower = parsed.searchTerm.lowercased()
                 immediateResults = downloads.filter {
@@ -103,6 +147,17 @@ public final class SearchViewModel: ObservableObject {
         if category == .all {
             let shots = screenshotsTracker.fetchRecentScreenshots(limit: 15, keyword: parsed.searchTerm)
             immediateResults.append(contentsOf: shots)
+
+            if !parsed.searchTerm.isEmpty {
+                let matchedApps = appLauncher.fetchApplications(keyword: parsed.searchTerm, limit: 5)
+                immediateResults.append(contentsOf: matchedApps)
+
+                let contacts = contactsEngine.searchContacts(keyword: parsed.searchTerm, limit: 3)
+                immediateResults.append(contentsOf: contacts)
+
+                let events = calendarEngine.searchEvents(keyword: parsed.searchTerm, limit: 3)
+                immediateResults.append(contentsOf: events)
+            }
         }
 
         // Query Spotlight for deeper system search & Outlook messages
@@ -112,7 +167,7 @@ public final class SearchViewModel: ObservableObject {
                 guard let self = self else { return }
 
                 var outlookCacheResults: [SearchItem] = []
-                if category == .emails || parsed.inferredCategory == .emails {
+                if category == .emails || parsed.inferredCategory == .emails || category == .all {
                     outlookCacheResults = self.outlookEngine.searchOutlookMessages(keyword: parsed.searchTerm, limit: 15)
                 }
 
@@ -133,9 +188,12 @@ public final class SearchViewModel: ObservableObject {
                     }
                 }
 
-                self.results = merged
-                if self.selectedItem == nil || !merged.contains(where: { $0.id == self.selectedItem?.id }) {
-                    self.selectedItem = merged.first
+                // Apply Relevance Ranking Engine (title match + token overlap + recency + frecency)
+                let ranked = self.rankingEngine.rank(items: merged, parsedQuery: parsed, targetCategory: category)
+
+                self.results = ranked
+                if self.selectedItem == nil || !ranked.contains(where: { $0.id == self.selectedItem?.id }) {
+                    self.selectedItem = ranked.first
                 }
                 self.isSearching = false
             }

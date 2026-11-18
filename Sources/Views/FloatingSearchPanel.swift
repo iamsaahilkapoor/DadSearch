@@ -5,6 +5,9 @@ public struct FloatingSearchPanel: View {
     @ObservedObject var viewModel: SearchViewModel
     var onClose: () -> Void
 
+    @AppStorage("com.saahil.DadSearch.hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
+    @State private var showingOnboarding: Bool = false
+
     public init(viewModel: SearchViewModel, onClose: @escaping () -> Void = {}) {
         self.viewModel = viewModel
         self.onClose = onClose
@@ -32,22 +35,66 @@ public struct FloatingSearchPanel: View {
 
             Divider()
 
-            // Results list
-            if viewModel.results.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "sparkle.magnifyingglass")
-                        .font(.system(size: 36))
-                        .foregroundColor(.secondary.opacity(0.7))
-                    Text("Type anything to find recent downloads, emails, or docs")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.secondary)
+            // Results list or Empathetic Empty State
+            if viewModel.results.isEmpty && !viewModel.isSearching {
+                VStack(spacing: 14) {
+                    if viewModel.rawQuery.isEmpty {
+                        // Empty query state with tips & recent searches
+                        Image(systemName: "sparkle.magnifyingglass")
+                            .font(.system(size: 38))
+                            .foregroundColor(.secondary.opacity(0.7))
+
+                        Text("Type anything to find downloads, emails, or apps")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(.primary)
+
+                        Text("Try searching: 'pdf from last week', 'screenshot', or an app name")
+                            .font(.system(size: 13))
+                            .foregroundColor(.secondary)
+
+                        if !viewModel.recentQueries.isEmpty {
+                            VStack(spacing: 6) {
+                                Text("Recent searches:")
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundColor(.secondary)
+
+                                HStack(spacing: 8) {
+                                    ForEach(viewModel.recentQueries.prefix(3), id: \.self) { query in
+                                        Button(action: { viewModel.rawQuery = query }) {
+                                            Text(query)
+                                                .font(.system(size: 11, weight: .medium))
+                                                .padding(.horizontal, 10)
+                                                .padding(.vertical, 4)
+                                                .background(Color(NSColor.separatorColor).opacity(0.2))
+                                                .cornerRadius(6)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                            }
+                            .padding(.top, 8)
+                        }
+                    } else {
+                        // Empathetic "No Results" state
+                        Image(systemName: "magnifyingglass.circle")
+                            .font(.system(size: 40))
+                            .foregroundColor(.orange.opacity(0.8))
+
+                        Text("No matching files found for \"\(viewModel.rawQuery)\"")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(.primary)
+
+                        Text("Tip: Check your spelling or try searching by category (like 'PDF & Docs')")
+                            .font(.system(size: 13))
+                            .foregroundColor(.secondary)
+                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.vertical, 40)
+                .padding(.vertical, 44)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 3) {
-                        ForEach(viewModel.results.prefix(30)) { item in
+                        ForEach(viewModel.results.prefix(40)) { item in
                             SearchResultRow(
                                 item: item,
                                 isSelected: viewModel.selectedItem == item,
@@ -61,12 +108,12 @@ public struct FloatingSearchPanel: View {
                     }
                     .padding(8)
                 }
-                .frame(maxHeight: 420)
+                .frame(maxHeight: 430)
             }
 
             Divider()
 
-            // Bottom Keyboard shortcuts hint
+            // Bottom Keyboard shortcuts hint & Status
             HStack(spacing: 16) {
                 ShortcutHint(key: "↵", label: "Open")
                 ShortcutHint(key: "Space", label: "Quick Look")
@@ -75,10 +122,18 @@ public struct FloatingSearchPanel: View {
 
                 Spacer()
 
+                Button(action: { showingOnboarding = true }) {
+                    Image(systemName: "questionmark.circle")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Show DadSearch Guide")
+
                 let count = viewModel.results.count
                 if count > 0 {
                     Text("\(count) items")
-                        .font(.system(size: 11))
+                        .font(.system(size: 11, weight: .medium))
                         .foregroundColor(.secondary)
                 }
             }
@@ -86,14 +141,25 @@ public struct FloatingSearchPanel: View {
             .padding(.vertical, 10)
             .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
         }
-        .frame(width: 620)
+        .frame(width: 640)
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                .stroke(Color.white.opacity(0.18), lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.25), radius: 24, x: 0, y: 12)
+        .shadow(color: .black.opacity(0.28), radius: 28, x: 0, y: 14)
+        .sheet(isPresented: $showingOnboarding) {
+            OnboardingWelcomeSheet(onDismiss: {
+                hasCompletedOnboarding = true
+                showingOnboarding = false
+            })
+        }
+        .onAppear {
+            if !hasCompletedOnboarding {
+                showingOnboarding = true
+            }
+        }
     }
 }
 
@@ -107,11 +173,11 @@ private struct ShortcutHint: View {
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .padding(.horizontal, 5)
                 .padding(.vertical, 2)
-                .background(Color(NSColor.separatorColor).opacity(0.3))
+                .background(Color(NSColor.separatorColor).opacity(0.35))
                 .cornerRadius(4)
 
             Text(label)
-                .font(.system(size: 11))
+                .font(.system(size: 11, weight: .medium))
                 .foregroundColor(.secondary)
         }
     }

@@ -9,17 +9,25 @@ public enum SearchItemKind: String, Codable, Sendable, CaseIterable {
     case archive
     case screenshot
     case chatAttachment
+    case application
+    case contact
+    case calendarEvent
+    case note
     case other
 
     public var displayName: String {
         switch self {
         case .document: return "Document"
         case .download: return "Download"
-        case .email: return "Outlook Email"
+        case .email: return "Email Message"
         case .image: return "Image / Photo"
         case .archive: return "Zip / Archive"
         case .screenshot: return "Screenshot"
         case .chatAttachment: return "Chat Attachment"
+        case .application: return "Application"
+        case .contact: return "Contact"
+        case .calendarEvent: return "Calendar Event"
+        case .note: return "Note"
         case .other: return "File"
         }
     }
@@ -33,6 +41,10 @@ public enum SearchItemKind: String, Codable, Sendable, CaseIterable {
         case .archive: return "doc.zipper"
         case .screenshot: return "camera.viewfinder"
         case .chatAttachment: return "bubble.left.and.bubble.right.fill"
+        case .application: return "app.fill"
+        case .contact: return "person.crop.circle.fill"
+        case .calendarEvent: return "calendar"
+        case .note: return "note.text"
         case .other: return "doc.fill"
         }
     }
@@ -46,6 +58,10 @@ public enum SearchItemKind: String, Codable, Sendable, CaseIterable {
         case .archive: return "orange"
         case .screenshot: return "teal"
         case .chatAttachment: return "pink"
+        case .application: return "cyan"
+        case .contact: return "orange"
+        case .calendarEvent: return "red"
+        case .note: return "yellow"
         case .other: return "gray"
         }
     }
@@ -63,6 +79,7 @@ public struct SearchItem: Identifiable, Sendable, Hashable {
     public let authorOrSender: String?
     public let isOutlookItem: Bool
     public let matchSnippet: String?
+    public var score: Double
 
     public init(
         id: String = UUID().uuidString,
@@ -75,7 +92,8 @@ public struct SearchItem: Identifiable, Sendable, Hashable {
         fileSize: Int64? = nil,
         authorOrSender: String? = nil,
         isOutlookItem: Bool = false,
-        matchSnippet: String? = nil
+        matchSnippet: String? = nil,
+        score: Double = 0.0
     ) {
         self.id = id
         self.title = title
@@ -88,6 +106,7 @@ public struct SearchItem: Identifiable, Sendable, Hashable {
         self.authorOrSender = authorOrSender
         self.isOutlookItem = isOutlookItem
         self.matchSnippet = matchSnippet
+        self.score = score
     }
 
     public var formattedDate: String {

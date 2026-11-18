@@ -5,13 +5,41 @@ public final class QueryParser: Sendable {
 
     public init() {}
 
+    // Dictionary of common typos or vernacular words used by non-tech / older users
+    private let commonMisspellings: [String: String] = [
+        "recipt": "receipt",
+        "reciept": "receipt",
+        "receit": "receipt",
+        "invoce": "invoice",
+        "invioce": "invoice",
+        "statment": "statement",
+        "statmnt": "statement",
+        "perscription": "prescription",
+        "perscrip": "prescription",
+        "apointment": "appointment",
+        "apointmnt": "appointment",
+        "apppointment": "appointment",
+        "docter": "doctor",
+        "docotr": "doctor",
+        "screenhot": "screenshot",
+        "screnshot": "screenshot",
+        "whatspp": "whatsapp",
+        "whatsap": "whatsapp",
+        "telgram": "telegram",
+        "telegrm": "telegram",
+        "downlod": "download",
+        "downlaod": "download",
+        "calender": "calendar",
+        "calander": "calendar"
+    ]
+
     public func parse(query: String) -> ParsedQuery {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return ParsedQuery(rawQuery: "", cleanedTerms: [])
         }
 
-        let words = trimmed.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+        let rawWords = trimmed.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
         var cleanedTerms: [String] = []
         var detectedExtensions: [String] = []
         var dateInterval: DateInterval? = nil
@@ -50,8 +78,13 @@ public final class QueryParser: Sendable {
             "today", "yesterday", "this", "last", "week", "month", "from", "since", "in", "the", "dated"
         ]
 
-        for word in words {
-            let lower = word.lowercased()
+        for word in rawWords {
+            var lower = word.lowercased()
+
+            // Apply fuzzy / typo correction
+            if let corrected = commonMisspellings[lower] {
+                lower = corrected
+            }
 
             // Extension / type token
             if lower == "pdf" || lower == ".pdf" {
@@ -88,12 +121,21 @@ public final class QueryParser: Sendable {
                 inferredCategory = .chatAttachments
                 continue
             }
+            if lower == "app" || lower == "apps" || lower == "application" || lower == "launch" || lower == "open" {
+                inferredCategory = .apps
+                continue
+            }
+            if lower == "contact" || lower == "contacts" || lower == "phone" || lower == "call" || lower == "appointment" || lower == "calendar" || lower == "event" || lower == "meeting" {
+                inferredCategory = .contacts
+                continue
+            }
 
             if dateTokens.contains(lower) {
                 continue
             }
 
-            cleanedTerms.append(word)
+            // If word was corrected from a typo, keep the corrected version
+            cleanedTerms.append(lower)
         }
 
         return ParsedQuery(

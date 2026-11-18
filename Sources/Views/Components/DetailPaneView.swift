@@ -3,6 +3,7 @@ import AppKit
 
 public struct DetailPaneView: View {
     let item: SearchItem?
+    @State private var thumbnail: NSImage? = nil
 
     public init(item: SearchItem?) {
         self.item = item
@@ -16,12 +17,20 @@ public struct DetailPaneView: View {
                     ZStack {
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
                             .fill(Color(NSColor.controlBackgroundColor))
-                            .frame(width: 80, height: 80)
-                            .shadow(color: .black.opacity(0.08), radius: 6, x: 0, y: 3)
+                            .frame(width: 100, height: 100)
+                            .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
 
-                        Image(systemName: item.kind.systemImage)
-                            .font(.system(size: 38))
-                            .foregroundColor(accentColor(for: item.kind))
+                        if let thumb = thumbnail {
+                            Image(nsImage: thumb)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(width: 90, height: 90)
+                                .cornerRadius(12)
+                        } else {
+                            Image(systemName: item.kind.systemImage)
+                                .font(.system(size: 44))
+                                .foregroundColor(accentColor(for: item.kind))
+                        }
                     }
 
                     Text(item.title)
@@ -31,18 +40,21 @@ public struct DetailPaneView: View {
                         .padding(.horizontal)
 
                     Text(item.kind.displayName)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(.secondary)
                         .padding(.horizontal, 10)
-                        .padding(.vertical, 3)
-                        .background(Capsule().fill(Color(NSColor.separatorColor).opacity(0.2)))
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(Color(NSColor.separatorColor).opacity(0.25)))
+                }
+                .task(id: item.id) {
+                    loadThumbnail(for: item)
                 }
 
                 Divider()
 
                 // Metadata Rows
                 VStack(alignment: .leading, spacing: 14) {
-                    MetadataRow(label: "Location", value: item.fileURL?.path ?? "Unknown")
+                    MetadataRow(label: "Location", value: item.fileURL?.path ?? item.subtitle)
                     MetadataRow(label: "Date", value: item.formattedDate)
 
                     if let size = item.formattedFileSize {
@@ -50,7 +62,11 @@ public struct DetailPaneView: View {
                     }
 
                     if let sender = item.authorOrSender {
-                        MetadataRow(label: "Sender / Author", value: sender)
+                        MetadataRow(label: "Source / Author", value: sender)
+                    }
+
+                    if item.score > 0 {
+                        MetadataRow(label: "Match Confidence", value: "\(Int(item.score))%")
                     }
                 }
                 .padding(.horizontal)
@@ -60,29 +76,31 @@ public struct DetailPaneView: View {
                 // Action Buttons
                 VStack(spacing: 10) {
                     Button(action: { QuickActionService.shared.open(item: item) }) {
-                        Label("Open in Default App", systemImage: "arrow.up.forward.app")
-                            .font(.system(size: 14, weight: .medium))
+                        Label(item.kind == .application ? "Launch Application" : "Open in Default App", systemImage: item.kind == .application ? "play.fill" : "arrow.up.forward.app")
+                            .font(.system(size: 14, weight: .semibold))
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 8)
+                            .padding(.vertical, 10)
                     }
                     .buttonStyle(.borderedProminent)
 
-                    HStack(spacing: 8) {
-                        Button(action: { QuickActionService.shared.revealInFinder(item: item) }) {
-                            Label("Reveal", systemImage: "folder")
-                                .font(.system(size: 12, weight: .medium))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 6)
-                        }
-                        .buttonStyle(.bordered)
+                    if item.fileURL != nil {
+                        HStack(spacing: 8) {
+                            Button(action: { QuickActionService.shared.revealInFinder(item: item) }) {
+                                Label("Reveal", systemImage: "folder")
+                                    .font(.system(size: 13, weight: .medium))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 8)
+                            }
+                            .buttonStyle(.bordered)
 
-                        Button(action: { QuickActionService.shared.toggleQuickLook(for: item) }) {
-                            Label("Quick Look", systemImage: "eye")
-                                .font(.system(size: 12, weight: .medium))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 6)
+                            Button(action: { QuickActionService.shared.toggleQuickLook(for: item) }) {
+                                Label("Quick Look", systemImage: "eye")
+                                    .font(.system(size: 13, weight: .medium))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 8)
+                            }
+                            .buttonStyle(.bordered)
                         }
-                        .buttonStyle(.bordered)
                     }
                 }
                 .padding(.horizontal)
@@ -91,17 +109,27 @@ public struct DetailPaneView: View {
             } else {
                 VStack(spacing: 12) {
                     Image(systemName: "hand.tap")
-                        .font(.system(size: 36))
-                        .foregroundColor(.secondary)
-                    Text("Select a file or email to preview")
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.system(size: 40))
+                        .foregroundColor(.secondary.opacity(0.7))
+                    Text("Select a file or result to preview")
+                        .font(.system(size: 15, weight: .medium))
                         .foregroundColor(.secondary)
                 }
                 .frame(maxHeight: .infinity)
             }
         }
-        .frame(width: 280)
-        .background(Color(NSColor.windowBackgroundColor).opacity(0.5))
+        .frame(width: 290)
+        .background(Color(NSColor.windowBackgroundColor).opacity(0.6))
+    }
+
+    private func loadThumbnail(for item: SearchItem) {
+        guard let url = item.fileURL else {
+            self.thumbnail = nil
+            return
+        }
+        ThumbnailCacheService.shared.fetchThumbnail(for: url, size: CGSize(width: 160, height: 160)) { @MainActor img in
+            self.thumbnail = img
+        }
     }
 
     private func accentColor(for kind: SearchItemKind) -> Color {
@@ -113,6 +141,10 @@ public struct DetailPaneView: View {
         case .archive: return .orange
         case .screenshot: return .teal
         case .chatAttachment: return .pink
+        case .application: return .cyan
+        case .contact: return .orange
+        case .calendarEvent: return .red
+        case .note: return .yellow
         case .other: return .gray
         }
     }

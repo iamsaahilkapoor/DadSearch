@@ -6,9 +6,33 @@ import QuickLookUI
 public final class QuickActionService {
     public static let shared = QuickActionService()
 
+    private let previewController = QuickLookPreviewController()
+
     private init() {}
 
     public func open(item: SearchItem) {
+        SearchHistoryStore.shared.recordItemOpened(id: item.id)
+
+        if item.kind == .application, let url = item.fileURL {
+            NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+            return
+        }
+
+        if item.kind == .contact {
+            if let name = item.title.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+               let url = URL(string: "addressbook://\(name)") {
+                NSWorkspace.shared.open(url)
+            }
+            return
+        }
+
+        if item.kind == .calendarEvent {
+            if let url = URL(string: "ical://") {
+                NSWorkspace.shared.open(url)
+            }
+            return
+        }
+
         guard let url = item.fileURL else { return }
         NSWorkspace.shared.open(url)
     }
@@ -33,11 +57,30 @@ public final class QuickActionService {
     }
 
     public func toggleQuickLook(for item: SearchItem) {
+        guard let url = item.fileURL else { return }
+
         guard let panel = QLPreviewPanel.shared() else { return }
-        if panel.isVisible {
+        if panel.isVisible && previewController.currentPreviewItem?.previewItemURL == url {
             panel.orderOut(nil)
+            previewController.currentPreviewItem = nil
         } else {
+            previewController.currentPreviewItem = url as NSURL
+            panel.dataSource = previewController
+            panel.delegate = previewController
+            panel.reloadData()
             panel.makeKeyAndOrderFront(nil)
         }
+    }
+}
+
+private final class QuickLookPreviewController: NSObject, QLPreviewPanelDataSource, QLPreviewPanelDelegate, @unchecked Sendable {
+    var currentPreviewItem: QLPreviewItem?
+
+    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
+        return currentPreviewItem == nil ? 0 : 1
+    }
+
+    func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! {
+        return currentPreviewItem
     }
 }

@@ -25,16 +25,18 @@ public struct MainWindowView: View {
                 FilterChipBar(selectedCategory: $viewModel.selectedCategory)
 
                 if viewModel.results.isEmpty && !viewModel.isSearching {
-                    VStack(spacing: 12) {
+                    VStack(spacing: 14) {
                         Image(systemName: "magnifyingglass.circle")
-                            .font(.system(size: 40))
-                            .foregroundColor(.secondary.opacity(0.6))
-                        Text("No matching documents or emails found")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundColor(.secondary)
+                            .font(.system(size: 44))
+                            .foregroundColor(.orange.opacity(0.8))
+
+                        Text("No matching files, emails, or apps found")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.primary)
+
                         Text("Try searching with general terms or dates (e.g., 'pdf', 'last week')")
-                            .font(.system(size: 12))
-                            .foregroundColor(.secondary.opacity(0.8))
+                            .font(.system(size: 13))
+                            .foregroundColor(.secondary)
                     }
                     .frame(maxHeight: .infinity)
                 } else {
@@ -46,7 +48,7 @@ public struct MainWindowView: View {
                                 onSelect: { viewModel.selectedItem = item },
                                 onOpen: { QuickActionService.shared.open(item: item) }
                             )
-                            .listRowInsets(EdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4))
+                            .listRowInsets(EdgeInsets(top: 3, leading: 6, bottom: 3, trailing: 6))
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
                             .id(item.id)
@@ -56,11 +58,11 @@ public struct MainWindowView: View {
                 }
             }
             .padding(14)
-            .navigationSplitViewColumnWidth(min: 440, ideal: 520, max: 700)
+            .navigationSplitViewColumnWidth(min: 460, ideal: 540, max: 720)
 
         } detail: {
             DetailPaneView(item: viewModel.selectedItem)
         }
-        .frame(minWidth: 750, minHeight: 520)
+        .frame(minWidth: 780, minHeight: 540)
     }
 }

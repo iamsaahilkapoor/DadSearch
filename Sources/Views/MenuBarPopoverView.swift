@@ -21,20 +21,20 @@ public struct MenuBarPopoverView: View {
 
             FilterChipBar(selectedCategory: $viewModel.selectedCategory)
 
-            if viewModel.results.isEmpty {
-                VStack(spacing: 8) {
+            if viewModel.results.isEmpty && !viewModel.isSearching {
+                VStack(spacing: 10) {
                     Image(systemName: "tray")
-                        .font(.system(size: 24))
+                        .font(.system(size: 28))
                         .foregroundColor(.secondary)
-                    Text("No recent files found")
-                        .font(.system(size: 13))
+                    Text(viewModel.rawQuery.isEmpty ? "No recent items found" : "No results for \"\(viewModel.rawQuery)\"")
+                        .font(.system(size: 14, weight: .medium))
                         .foregroundColor(.secondary)
                 }
-                .frame(height: 240)
+                .frame(height: 260)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 4) {
-                        ForEach(viewModel.results.prefix(20)) { item in
+                        ForEach(viewModel.results.prefix(25)) { item in
                             SearchResultRow(
                                 item: item,
                                 isSelected: viewModel.selectedItem == item,
@@ -44,10 +44,10 @@ public struct MenuBarPopoverView: View {
                         }
                     }
                 }
-                .frame(height: 380)
+                .frame(height: 390)
             }
         }
         .padding(12)
-        .frame(width: 460)
+        .frame(width: 480)
     }
 }
