@@ -34,5 +34,19 @@
     <true/>
     <key>NSSupportsAutomaticGraphicsSwitching</key>
     <true/>
+
+    <!-- Privacy & Permissions Descriptions -->
+    <key>NSContactsUsageDescription</key>
+    <string>DadSearch searches your local contacts when you type a person's name, email, or phone number.</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>DadSearch searches your calendar events and appointments.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>DadSearch searches your calendar events and appointments.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>DadSearch quickly finds downloaded PDFs, statements, and files in your Downloads folder.</string>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>DadSearch indexes screenshots and documents on your Desktop.</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>DadSearch finds documents, spreadsheets, and files in your Documents folder.</string>
 </dict>
 </plist>
