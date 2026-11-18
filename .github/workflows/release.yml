@@ -6,17 +6,17 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-and-release:
     name: Build & Release macOS App
-    runs-on: macos-14
+    runs-on: macos-latest
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-
-      - name: Setup Swift
-        uses: swift-actions/setup-swift@v2
 
       - name: Build DadSearch App and DMG
         run: |
@@ -36,18 +36,17 @@ jobs:
           body: |
             ### 🔍 DadSearch ${{ github.ref_name }}
             
-            A native, ultra-lightweight, and elegant macOS universal search app designed for finding downloaded documents, Outlook emails, screenshots, and chat attachments with zero cognitive friction.
+            A native, ultra-lightweight, and elegant macOS universal search app designed for finding downloaded documents, emails, apps, screenshots, and chat attachments with zero cognitive friction.
             
             #### ⬇️ Download & Install
             1. Download `DadSearch.dmg` below.
             2. Double-click the DMG and drag **DadSearch** into your **Applications** folder.
-            3. *First time opening:* Right-click `DadSearch` in Applications and choose **Open**.
+            3. *First time opening:* Right-click `DadSearch` in Applications and choose **Open**, or run `xattr -cr /Applications/DadSearch.app`.
             
             #### ✨ Highlights:
-            - **3-in-1 Modes:** Floating launcher (`⌥ + Space`), Menu Bar icon, and split-view Window.
-            - **Spotlight Fast Engine:** Fast queries without battery or CPU drain.
-            - **Outlook Emails & Caches:** Surfaces emails and `.eml` messages.
-            - **Screenshots & Recordings:** Easily locates screen captures buried on Desktop.
-            - **Chat Attachments:** Finds documents received in WhatsApp, Telegram, and Messages.
+            - **Global Floating Launcher:** Summon instantly with `⌥ + Space` (Option + Space).
+            - **Universal Providers:** Apps, Apple Mail, Outlook, Contacts, Calendar, Downloads, Screenshots, and Chat Attachments.
+            - **Forgiving & Fast:** Typo-tolerant matching, natural language dates, and relevance ranking.
+            - **Senior-Friendly:** Large type, high contrast, live thumbnails, and Quick Look (Spacebar).
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
