@@ -55,11 +55,12 @@ public final class SearchViewModel: ObservableObject {
 
     public func loadInitialRecents() {
         isSearching = true
-        let recentDownloads = downloadsTracker.fetchRecentDownloads(limit: 20)
-        let recentScreenshots = screenshotsTracker.fetchRecentScreenshots(limit: 15)
-        let recentApps = appLauncher.fetchApplications(limit: 10)
+        let recentDownloads = downloadsTracker.fetchRecentDownloads(limit: 15)
+        let recentScreenshots = screenshotsTracker.fetchRecentScreenshots(limit: 10)
+        let recentApps = appLauncher.fetchApplications(limit: 8)
+        let recentEmails = outlookEngine.searchOutlookMessages(keyword: "", limit: 10)
 
-        let merged = (recentDownloads + recentScreenshots + recentApps).sorted {
+        let merged = (recentDownloads + recentScreenshots + recentApps + recentEmails).sorted {
             ($0.addedDate ?? $0.modificationDate) > ($1.addedDate ?? $1.modificationDate)
         }
         self.results = merged
@@ -122,6 +123,16 @@ public final class SearchViewModel: ObservableObject {
             let events = calendarEngine.searchEvents(keyword: parsed.searchTerm, limit: 15)
             let merged = contacts + events
             let ranked = rankingEngine.rank(items: merged, parsedQuery: parsed, targetCategory: category)
+            self.results = ranked
+            self.selectedItem = ranked.first
+            self.isSearching = false
+            return
+        }
+
+        // Fast path 5: Emails (New Outlook, Apple Mail & Legacy Outlook)
+        if category == .emails {
+            let emails = outlookEngine.searchOutlookMessages(keyword: parsed.searchTerm, limit: 50)
+            let ranked = rankingEngine.rank(items: emails, parsedQuery: parsed, targetCategory: category)
             self.results = ranked
             self.selectedItem = ranked.first
             self.isSearching = false

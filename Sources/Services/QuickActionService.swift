@@ -18,6 +18,19 @@ public final class QuickActionService {
             return
         }
 
+        if item.isOutlookItem {
+            // If it is an email attachment file, open it directly in default app
+            if let url = item.fileURL, url.path.contains("Attachments") {
+                NSWorkspace.shared.open(url)
+                return
+            }
+            // If it is an Outlook message, launch or switch to Microsoft Outlook
+            if let outlookURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.microsoft.Outlook") {
+                NSWorkspace.shared.openApplication(at: outlookURL, configuration: NSWorkspace.OpenConfiguration())
+                return
+            }
+        }
+
         if item.kind == .contact {
             if let name = item.title.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
                let url = URL(string: "addressbook://\(name)") {
