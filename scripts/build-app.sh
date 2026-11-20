@@ -51,6 +51,10 @@ hdiutil create -volname "$APP_NAME" \
 
 rm -rf "$DMG_STAGING"
 
+# Also create zip archive of the .app
+ditto -c -k --keepParent "$APP_BUNDLE" "$BUILD_DIR/$APP_NAME.zip"
+
 echo "✅ Successfully created:"
 echo "   App Bundle: $APP_BUNDLE"
 echo "   DMG:        $DMG_PATH"
+echo "   ZIP:        $BUILD_DIR/$APP_NAME.zip"

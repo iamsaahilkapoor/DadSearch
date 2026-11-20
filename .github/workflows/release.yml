@@ -32,7 +32,7 @@ jobs:
           prerelease: false
           files: |
             build/DadSearch.dmg
-            build/DadSearch.app
+            build/DadSearch.zip
           body: |
             ### 🔍 DadSearch ${{ github.ref_name }}
             
