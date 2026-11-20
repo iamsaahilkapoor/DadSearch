@@ -17,12 +17,14 @@ public struct MainWindowView: View {
                     isSearching: viewModel.isSearching,
                     onCommit: {
                         if let selected = viewModel.selectedItem {
-                            QuickActionService.shared.open(item: selected)
+                            viewModel.handleItemOpened(selected)
                         }
                     }
                 )
 
                 FilterChipBar(selectedCategory: $viewModel.selectedCategory)
+
+                CoverageHealthView()
 
                 if viewModel.results.isEmpty && !viewModel.isSearching {
                     VStack(spacing: 14) {
@@ -39,6 +41,12 @@ public struct MainWindowView: View {
                             .foregroundColor(.secondary)
                     }
                     .frame(maxHeight: .infinity)
+                } else if viewModel.rawQuery.isEmpty && !viewModel.todayArrivals.isEmpty && viewModel.selectedCategory == .all {
+                    ArrivalRadarTimelineView(
+                        items: viewModel.todayArrivals,
+                        onSelect: { item in viewModel.selectedItem = item },
+                        onOpen: { item in viewModel.handleItemOpened(item) }
+                    )
                 } else {
                     ScrollViewReader { proxy in
                         List(viewModel.results, selection: $viewModel.selectedItem) { item in
@@ -46,7 +54,7 @@ public struct MainWindowView: View {
                                 item: item,
                                 isSelected: viewModel.selectedItem == item,
                                 onSelect: { viewModel.selectedItem = item },
-                                onOpen: { QuickActionService.shared.open(item: item) }
+                                onOpen: { viewModel.handleItemOpened(item) }
                             )
                             .listRowInsets(EdgeInsets(top: 3, leading: 6, bottom: 3, trailing: 6))
                             .listRowBackground(Color.clear)

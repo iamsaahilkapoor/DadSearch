@@ -3,9 +3,13 @@ import Foundation
 public final class QueryParser: Sendable {
     public static let shared = QueryParser()
 
-    public init() {}
+    private let dateDetector: NSDataDetector?
 
-    // Dictionary of common typos or vernacular words used by non-tech / older users
+    public init() {
+        self.dateDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue)
+    }
+
+    // Common misspellings mapped to correct roots
     private let commonMisspellings: [String: String] = [
         "recipt": "receipt",
         "reciept": "receipt",
@@ -15,22 +19,14 @@ public final class QueryParser: Sendable {
         "statment": "statement",
         "statmnt": "statement",
         "perscription": "prescription",
-        "perscrip": "prescription",
         "apointment": "appointment",
         "apointmnt": "appointment",
-        "apppointment": "appointment",
         "docter": "doctor",
-        "docotr": "doctor",
         "screenhot": "screenshot",
-        "screnshot": "screenshot",
         "whatspp": "whatsapp",
-        "whatsap": "whatsapp",
         "telgram": "telegram",
-        "telegrm": "telegram",
         "downlod": "download",
-        "downlaod": "download",
-        "calender": "calendar",
-        "calander": "calendar"
+        "calender": "calendar"
     ]
 
     public func parse(query: String) -> ParsedQuery {
@@ -39,102 +35,96 @@ public final class QueryParser: Sendable {
             return ParsedQuery(rawQuery: "", cleanedTerms: [])
         }
 
-        let rawWords = trimmed.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
-        var cleanedTerms: [String] = []
-        var detectedExtensions: [String] = []
-        var dateInterval: DateInterval? = nil
-        var inferredCategory: SearchCategoryFilter? = nil
+        var detectedDateInterval: DateInterval? = nil
+        var textWithoutDates = trimmed
 
-        let now = Date()
-        let calendar = Calendar.current
-        let lowercasedFull = trimmed.lowercased()
+        // 1. Natural language date parsing using NSDataDetector ("yesterday", "last week", "in March", "last Tuesday")
+        if let detector = dateDetector {
+            let matches = detector.matches(in: trimmed, options: [], range: NSRange(location: 0, length: trimmed.utf16.count))
+            for match in matches {
+                if let detectedDate = match.date {
+                    let now = Date()
+                    let calendar = Calendar.current
+                    if match.duration > 0 {
+                        detectedDateInterval = DateInterval(start: detectedDate, duration: match.duration)
+                    } else if detectedDate <= now {
+                        let start = calendar.startOfDay(for: detectedDate)
+                        let end = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: detectedDate) ?? now
+                        detectedDateInterval = DateInterval(start: start, end: end)
+                    } else {
+                        detectedDateInterval = DateInterval(start: now, end: detectedDate)
+                    }
 
-        // 1. Natural language date parsing
-        if lowercasedFull.contains("today") {
-            let start = calendar.startOfDay(for: now)
-            dateInterval = DateInterval(start: start, end: now)
-        } else if lowercasedFull.contains("yesterday") {
-            if let yesterday = calendar.date(byAdding: .day, value: -1, to: now) {
-                let start = calendar.startOfDay(for: yesterday)
-                let end = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: yesterday) ?? now
-                dateInterval = DateInterval(start: start, end: end)
-            }
-        } else if lowercasedFull.contains("this week") {
-            if let startOfWeek = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now)) {
-                dateInterval = DateInterval(start: startOfWeek, end: now)
-            }
-        } else if lowercasedFull.contains("last week") {
-            if let sevenDaysAgo = calendar.date(byAdding: .day, value: -7, to: now) {
-                dateInterval = DateInterval(start: sevenDaysAgo, end: now)
-            }
-        } else if lowercasedFull.contains("this month") || lowercasedFull.contains("last month") {
-            if let thirtyDaysAgo = calendar.date(byAdding: .day, value: -30, to: now) {
-                dateInterval = DateInterval(start: thirtyDaysAgo, end: now)
+                    // Remove the detected date text from the search term
+                    if let range = Range(match.range, in: textWithoutDates) {
+                        textWithoutDates.removeSubrange(range)
+                    }
+                }
             }
         }
 
-        // 2. Token extraction & stop words removal
-        let dateTokens: Set<String> = [
-            "today", "yesterday", "this", "last", "week", "month", "from", "since", "in", "the", "dated"
-        ]
+        // 2. Token extraction & typo correction
+        let rawWords = textWithoutDates.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+        var cleanedTerms: [String] = []
+        var detectedExtensions: [String] = []
+        var inferredCategory: SearchCategoryFilter? = nil
+
+        let lowercasedWords = rawWords.map { $0.lowercased() }
+        let hasBillOrFinanceContext = lowercasedWords.contains { ["bill", "invoice", "statement", "receipt", "recharge", "tax"].contains($0) }
 
         for word in rawWords {
             var lower = word.lowercased()
 
-            // Apply fuzzy / typo correction
+            // Apply typo correction
             if let corrected = commonMisspellings[lower] {
                 lower = corrected
             }
 
-            // Extension / type token
+            // Extension / explicit format tokens
             if lower == "pdf" || lower == ".pdf" {
                 detectedExtensions.append("pdf")
                 inferredCategory = .documents
                 continue
             }
-            if lower == "doc" || lower == "docx" || lower == ".docx" || lower == "word" {
-                detectedExtensions.append("docx")
-                detectedExtensions.append("doc")
+            if lower == "docx" || lower == ".docx" || lower == "xlsx" || lower == ".xlsx" {
+                detectedExtensions.append(lower.replacingOccurrences(of: ".", with: ""))
                 inferredCategory = .documents
                 continue
             }
-            if lower == "excel" || lower == "sheet" || lower == "xlsx" || lower == "csv" {
-                detectedExtensions.append("xlsx")
-                detectedExtensions.append("csv")
-                detectedExtensions.append("xls")
-                inferredCategory = .documents
-                continue
-            }
-            if lower == "mail" || lower == "email" || lower == "outlook" {
-                inferredCategory = .emails
-                continue
-            }
-            if lower == "download" || lower == "downloads" || lower == "downloaded" {
-                inferredCategory = .downloads
-                continue
-            }
-            if lower == "screenshot" || lower == "screenshots" || lower == "screengrab" || lower == "capture" || lower == "snapshot" {
+
+            // Category hints (WITHOUT swallowing search terms!)
+            if lower == "screenshot" || lower == "screenshots" {
                 inferredCategory = .screenshots
+                cleanedTerms.append(lower)
                 continue
             }
-            if lower == "whatsapp" || lower == "telegram" || lower == "chat" || lower == "chats" || lower == "attachment" || lower == "attachments" || lower == "imessage" || lower == "message" || lower == "messages" {
+            if lower == "download" || lower == "downloads" {
+                inferredCategory = .downloads
+                cleanedTerms.append(lower)
+                continue
+            }
+            if lower == "mail" || lower == "email" || lower == "emails" || lower == "outlook" {
+                inferredCategory = .emails
+                cleanedTerms.append(lower)
+                continue
+            }
+            if lower == "whatsapp" || lower == "telegram" || lower == "chat" {
                 inferredCategory = .chatAttachments
+                cleanedTerms.append(lower)
                 continue
             }
-            if lower == "app" || lower == "apps" || lower == "application" || lower == "launch" || lower == "open" {
+            if lower == "launch" || lower == "app" || lower == "apps" {
                 inferredCategory = .apps
+                cleanedTerms.append(lower)
                 continue
             }
-            if lower == "contact" || lower == "contacts" || lower == "phone" || lower == "call" || lower == "appointment" || lower == "calendar" || lower == "event" || lower == "meeting" {
+            if lower == "call" || lower == "contact" || (lower == "phone" && !hasBillOrFinanceContext) {
                 inferredCategory = .contacts
+                cleanedTerms.append(lower)
                 continue
             }
 
-            if dateTokens.contains(lower) {
-                continue
-            }
-
-            // If word was corrected from a typo, keep the corrected version
+            // Normal search term
             cleanedTerms.append(lower)
         }
 
@@ -142,7 +132,7 @@ public final class QueryParser: Sendable {
             rawQuery: trimmed,
             cleanedTerms: cleanedTerms,
             detectedFileExtensions: detectedExtensions,
-            dateFilterRange: dateInterval,
+            dateFilterRange: detectedDateInterval,
             inferredCategory: inferredCategory
         )
     }

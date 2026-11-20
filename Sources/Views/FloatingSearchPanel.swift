@@ -22,7 +22,7 @@ public struct FloatingSearchPanel: View {
                     isSearching: viewModel.isSearching,
                     onCommit: {
                         if let selected = viewModel.selectedItem {
-                            QuickActionService.shared.open(item: selected)
+                            viewModel.handleItemOpened(selected)
                             onClose()
                         }
                     }
@@ -35,7 +35,7 @@ public struct FloatingSearchPanel: View {
 
             Divider()
 
-            // Results list or Empathetic Empty State
+            // Results list, Arrival Radar, or Empathetic Empty State
             if viewModel.results.isEmpty && !viewModel.isSearching {
                 VStack(spacing: 14) {
                     if viewModel.rawQuery.isEmpty {
@@ -91,16 +91,27 @@ public struct FloatingSearchPanel: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(.vertical, 44)
+            } else if viewModel.rawQuery.isEmpty && !viewModel.todayArrivals.isEmpty && viewModel.selectedCategory == .all {
+                // Feature Arrival Radar Timeline when search query is empty
+                ArrivalRadarTimelineView(
+                    items: viewModel.todayArrivals,
+                    onSelect: { item in viewModel.selectedItem = item },
+                    onOpen: { item in
+                        viewModel.handleItemOpened(item)
+                        onClose()
+                    }
+                )
+                .frame(maxHeight: 430)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 3) {
-                        ForEach(viewModel.results.prefix(40)) { item in
+                        ForEach(viewModel.results.prefix(50)) { item in
                             SearchResultRow(
                                 item: item,
                                 isSelected: viewModel.selectedItem == item,
                                 onSelect: { viewModel.selectedItem = item },
                                 onOpen: {
-                                    QuickActionService.shared.open(item: item)
+                                    viewModel.handleItemOpened(item)
                                     onClose()
                                 }
                             )
@@ -110,6 +121,11 @@ public struct FloatingSearchPanel: View {
                 }
                 .frame(maxHeight: 430)
             }
+
+            Divider()
+
+            // Coverage Health & Permissions Panel
+            CoverageHealthView()
 
             Divider()
 
