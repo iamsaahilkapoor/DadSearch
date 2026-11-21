@@ -13,6 +13,7 @@ public enum SearchItemKind: String, Codable, Sendable, CaseIterable {
     case contact
     case calendarEvent
     case note
+    case folder
     case other
 
     public var displayName: String {
@@ -28,6 +29,7 @@ public enum SearchItemKind: String, Codable, Sendable, CaseIterable {
         case .contact: return "Contact"
         case .calendarEvent: return "Calendar Event"
         case .note: return "Note"
+        case .folder: return "Folder"
         case .other: return "File"
         }
     }
@@ -45,6 +47,7 @@ public enum SearchItemKind: String, Codable, Sendable, CaseIterable {
         case .contact: return "person.crop.circle.fill"
         case .calendarEvent: return "calendar"
         case .note: return "note.text"
+        case .folder: return "folder.fill"
         case .other: return "doc.fill"
         }
     }
@@ -62,6 +65,7 @@ public enum SearchItemKind: String, Codable, Sendable, CaseIterable {
         case .contact: return "orange"
         case .calendarEvent: return "red"
         case .note: return "yellow"
+        case .folder: return "blue"
         case .other: return "gray"
         }
     }
@@ -80,6 +84,11 @@ public struct SearchItem: Identifiable, Sendable, Hashable {
     public let isOutlookItem: Bool
     public let matchSnippet: String?
     public var score: Double
+    /// Where the item came from: file, outlook, outlook-attachment, applemail, messages, whatsapp, telegram, mail-attachment, spotlight, app ...
+    public let source: String
+    /// Opaque provider reference (e.g. Outlook record id used to open the message).
+    public let ref: String
+    public let isHidden: Bool
 
     public init(
         id: String = UUID().uuidString,
@@ -93,7 +102,10 @@ public struct SearchItem: Identifiable, Sendable, Hashable {
         authorOrSender: String? = nil,
         isOutlookItem: Bool = false,
         matchSnippet: String? = nil,
-        score: Double = 0.0
+        score: Double = 0.0,
+        source: String = "",
+        ref: String = "",
+        isHidden: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -107,6 +119,9 @@ public struct SearchItem: Identifiable, Sendable, Hashable {
         self.isOutlookItem = isOutlookItem
         self.matchSnippet = matchSnippet
         self.score = score
+        self.source = source
+        self.ref = ref
+        self.isHidden = isHidden
     }
 
     public var formattedDate: String {

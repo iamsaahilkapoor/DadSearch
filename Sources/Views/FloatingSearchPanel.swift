@@ -125,7 +125,9 @@ public struct FloatingSearchPanel: View {
             Divider()
 
             // Coverage Health & Permissions Panel
-            CoverageHealthView()
+            HealthBanner(viewModel: viewModel)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
 
             Divider()
 

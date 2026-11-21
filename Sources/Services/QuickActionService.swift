@@ -12,23 +12,24 @@ public final class QuickActionService {
 
     public func open(item: SearchItem) {
         SearchHistoryStore.shared.recordItemOpened(id: item.id)
+        learnFromLastQuery(item: item)
 
         if item.kind == .application, let url = item.fileURL {
             NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
             return
         }
 
-        if item.isOutlookItem {
-            // If it is an email attachment file, open it directly in default app
-            if let url = item.fileURL, url.path.contains("Attachments") {
-                NSWorkspace.shared.open(url)
+        // Legacy Outlook message: open the exact message via AppleScript, fall back to the message file, then to Outlook itself.
+        if item.source == "outlook" {
+            if !item.ref.isEmpty, OutlookLegacyConnector.openMessage(recordID: item.ref) { return }
+            if let url = item.fileURL, let outlook = OutlookLegacyConnector.outlookAppURL {
+                NSWorkspace.shared.open([url], withApplicationAt: outlook, configuration: NSWorkspace.OpenConfiguration())
                 return
             }
-            // If it is an Outlook message, launch or switch to Microsoft Outlook
-            if let outlookURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.microsoft.Outlook") {
-                NSWorkspace.shared.openApplication(at: outlookURL, configuration: NSWorkspace.OpenConfiguration())
-                return
+            if let outlook = OutlookLegacyConnector.outlookAppURL {
+                NSWorkspace.shared.openApplication(at: outlook, configuration: NSWorkspace.OpenConfiguration())
             }
+            return
         }
 
         if item.kind == .contact {
@@ -48,6 +49,17 @@ public final class QuickActionService {
 
         guard let url = item.fileURL else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    /// "You typed X, then opened this" -> X finds this next time (hidden aliases stored in the index).
+    private func learnFromLastQuery(item: SearchItem) {
+        guard let q = SearchHistoryStore.shared.getRecentQueries(limit: 1).first, q.count >= 3 else { return }
+        let parsed = QueryParser.shared.parse(query: q)
+        let name = item.title.lowercased()
+        let novel = parsed.cleanedTerms.filter { !name.contains($0) }
+        guard !novel.isEmpty else { return }
+        let key = item.id
+        DispatchQueue.global(qos: .utility).async { IndexStore.shared.learn(key: key, terms: novel) }
     }
 
     public func revealInFinder(item: SearchItem) {

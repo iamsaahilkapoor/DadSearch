@@ -186,6 +186,7 @@ public struct SearchResultRow: View {
         case .contact: return .orange
         case .calendarEvent: return .red
         case .note: return .yellow
+        case .folder: return .secondary
         case .other: return .gray
         }
     }

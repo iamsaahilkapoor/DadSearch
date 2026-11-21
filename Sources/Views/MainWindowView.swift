@@ -24,7 +24,8 @@ public struct MainWindowView: View {
 
                 FilterChipBar(selectedCategory: $viewModel.selectedCategory)
 
-                CoverageHealthView()
+                HealthBanner(viewModel: viewModel)
+                    .padding(.horizontal, 12)
 
                 if viewModel.results.isEmpty && !viewModel.isSearching {
                     VStack(spacing: 14) {

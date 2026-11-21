@@ -48,5 +48,7 @@
     <string>DadSearch indexes screenshots and documents on your Desktop.</string>
     <key>NSDocumentsFolderUsageDescription</key>
     <string>DadSearch finds documents, spreadsheets, and files in your Documents folder.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>DadSearch opens the exact Outlook email you picked.</string>
 </dict>
 </plist>

@@ -19,5 +19,7 @@ let package = Package(
             dependencies: ["DadSearch"],
             path: "Tests/DadSearchTests"
         ),
-    ]
+    ],
+    // The index/crawler layer uses plain locks + serial queues, not Swift 6 strict concurrency.
+    swiftLanguageModes: [.v5]
 )

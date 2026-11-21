@@ -39,6 +39,10 @@ public final class SearchHistoryStore: @unchecked Sendable {
         return min(Double(count) * 15.0, 60.0) // Up to +60 boost
     }
 
+    public func frecencySnapshot() -> [String: Int] {
+        defaults.dictionary(forKey: frecencyKey) as? [String: Int] ?? [:]
+    }
+
     public func clearHistory() {
         defaults.removeObject(forKey: historyKey)
         defaults.removeObject(forKey: frecencyKey)

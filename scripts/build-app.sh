@@ -29,8 +29,8 @@ cp "$DIR/Resources/AppIcon.png" "$APP_BUNDLE/Contents/Resources/AppIcon.png"
 # Set executable permissions
 chmod +x "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 
-echo "🔏 Ad-hoc code signing $APP_NAME.app..."
-codesign --force --deep --sign - "$APP_BUNDLE"
+echo "🔏 Ad-hoc code signing $APP_NAME.app with entitlements..."
+codesign --force --deep --sign - --entitlements "$DIR/Resources/DadSearch.entitlements" "$APP_BUNDLE"
 
 echo "💿 Creating $APP_NAME.dmg installer..."
 DMG_STAGING="$BUILD_DIR/dmg_staging"

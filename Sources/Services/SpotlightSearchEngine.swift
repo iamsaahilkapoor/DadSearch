@@ -1,257 +1,102 @@
 import Foundation
-import CoreServices
+import AppKit
 
+/// Spotlight is now a SUPPLEMENT to our own index. Its unique value: full-text bodies of Outlook / Apple Mail
+/// messages (via their Spotlight importers) and documents our extractor has not reached yet.
 public final class SpotlightSearchEngine: @unchecked Sendable {
     public static let shared = SpotlightSearchEngine()
+    private var active = Set<SpotlightRun>()
+    private let activeLock = NSLock()
 
-    private let queue = DispatchQueue(label: "com.saahil.DadSearch.spotlightQueue")
-    private var metadataQuery: NSMetadataQuery?
-    private var completionHandler: (([SearchItem]) -> Void)?
+    private init() {}
 
-    public init() {}
+    /// Each call owns its own query object, so a slow old search can never overwrite a newer one.
+    public func search(parsed: ParsedQuery, completion: @escaping @Sendable ([SearchItem]) -> Void) {
+        let terms = parsed.allTerms
+        guard !terms.isEmpty else { completion([]); return }
+        guard let predicate = SpotlightSearchEngine.predicate(for: parsed) else { completion([]); return }
 
-    public func search(
-        parsedQuery: ParsedQuery,
-        category: SearchCategoryFilter,
-        completion: @escaping @Sendable ([SearchItem]) -> Void
-    ) {
         DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            self.stopCurrentQuery()
-
-            let query = NSMetadataQuery()
-            self.metadataQuery = query
-            self.completionHandler = completion
-
-            var subpredicates: [NSPredicate] = []
-
-            // 1. Text Search terms
-            let term = parsedQuery.searchTerm
-            if !term.isEmpty {
-                let escapedTerm = term.replacingOccurrences(of: "\"", with: "\\\"")
-                let namePredicate = NSPredicate(format: "%K LIKE[cd] %@", kMDItemDisplayName as String, "*\(escapedTerm)*")
-                let contentPredicate = NSPredicate(format: "%K LIKE[cd] %@", kMDItemTextContent as String, "*\(escapedTerm)*")
-                let titlePredicate = NSPredicate(format: "%K LIKE[cd] %@", "kMDItemTitle", "*\(escapedTerm)*")
-                let authorPredicate = NSPredicate(format: "%K LIKE[cd] %@", kMDItemAuthors as String, "*\(escapedTerm)*")
-
-                let combinedOr = NSCompoundPredicate(orPredicateWithSubpredicates: [
-                    namePredicate, contentPredicate, titlePredicate, authorPredicate
-                ])
-                subpredicates.append(combinedOr)
+            guard let self = self else { completion([]); return }
+            let run = SpotlightRun()
+            self.activeLock.lock(); self.active.insert(run); self.activeLock.unlock()
+            run.start(predicate: predicate) { [weak self] items in
+                self?.activeLock.lock(); self?.active.remove(run); self?.activeLock.unlock()
+                completion(items)
             }
-
-            // 2. Specific extensions
-            if !parsedQuery.detectedFileExtensions.isEmpty {
-                let extPredicates = parsedQuery.detectedFileExtensions.map { ext in
-                    NSPredicate(format: "%K LIKE[cd] %@", kMDItemFSName as String, "*.\(ext)")
-                }
-                subpredicates.append(NSCompoundPredicate(orPredicateWithSubpredicates: extPredicates))
-            }
-
-            // 3. Date constraints
-            if let dateRange = parsedQuery.dateFilterRange {
-                let datePred = NSPredicate(
-                    format: "%K >= %@ AND %K <= %@",
-                    kMDItemContentModificationDate as String,
-                    dateRange.start as NSDate,
-                    kMDItemContentModificationDate as String,
-                    dateRange.end as NSDate
-                )
-                subpredicates.append(datePred)
-            } else if category == .recent {
-                let sevenDaysAgo = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
-                let datePred = NSPredicate(
-                    format: "%K >= %@",
-                    kMDItemContentModificationDate as String,
-                    sevenDaysAgo as NSDate
-                )
-                subpredicates.append(datePred)
-            }
-
-            // 4. Category filtering
-            switch category {
-            case .emails:
-                // Include both Microsoft Outlook and Apple Mail (.emlx)
-                let emailPred = NSPredicate(
-                    format: "%K ==[cd] %@ OR %K ==[cd] %@ OR %K LIKE[cd] %@ OR %K LIKE[cd] %@",
-                    kMDItemContentType as String, "com.microsoft.outlook16.email-message",
-                    kMDItemContentType as String, "com.apple.mail.emlx",
-                    kMDItemFSName as String, "*.eml",
-                    kMDItemFSName as String, "*.olk15Message"
-                )
-                subpredicates.append(emailPred)
-
-            case .documents:
-                let docPred = NSPredicate(
-                    format: "%K LIKE[cd] %@ OR %K LIKE[cd] %@ OR %K LIKE[cd] %@ OR %K LIKE[cd] %@ OR %K LIKE[cd] %@",
-                    kMDItemFSName as String, "*.pdf",
-                    kMDItemFSName as String, "*.docx",
-                    kMDItemFSName as String, "*.doc",
-                    kMDItemFSName as String, "*.xlsx",
-                    kMDItemFSName as String, "*.pages"
-                )
-                subpredicates.append(docPred)
-
-            case .downloads:
-                if let dlURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first {
-                    query.searchScopes = [dlURL]
-                }
-
-            case .apps:
-                query.searchScopes = [
-                    URL(fileURLWithPath: "/Applications"),
-                    URL(fileURLWithPath: "/System/Applications"),
-                    URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Applications")
-                ]
-                let appPred = NSPredicate(format: "%K LIKE[cd] %@", kMDItemFSName as String, "*.app")
-                subpredicates.append(appPred)
-
-            case .contacts:
-                break
-
-            case .all, .recent, .screenshots, .chatAttachments:
-                break
-            }
-
-            if subpredicates.isEmpty {
-                query.searchScopes = [NSMetadataQueryUserHomeScope]
-                let recentDays = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
-                query.predicate = NSPredicate(format: "%K >= %@", kMDItemContentModificationDate as String, recentDays as NSDate)
-            } else if subpredicates.count == 1 {
-                query.predicate = subpredicates[0]
-                if query.searchScopes.isEmpty {
-                    query.searchScopes = [NSMetadataQueryUserHomeScope]
-                }
-            } else {
-                query.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: subpredicates)
-                if query.searchScopes.isEmpty {
-                    query.searchScopes = [NSMetadataQueryUserHomeScope]
-                }
-            }
-
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(self.queryDidFinishGathering(_:)),
-                name: .NSMetadataQueryDidFinishGathering,
-                object: query
-            )
-
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(self.queryDidUpdate(_:)),
-                name: .NSMetadataQueryDidUpdate,
-                object: query
-            )
-
-            query.start()
         }
     }
 
-    public func stopCurrentQuery() {
-        if let query = metadataQuery {
-            NotificationCenter.default.removeObserver(self, name: .NSMetadataQueryDidFinishGathering, object: query)
-            NotificationCenter.default.removeObserver(self, name: .NSMetadataQueryDidUpdate, object: query)
-            query.stop()
-            metadataQuery = nil
+    static func predicate(for parsed: ParsedQuery) -> NSPredicate? {
+        func esc(_ s: String) -> String {
+            s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
         }
+        // Every word must match somewhere (name, title, author, or word-prefix inside the text).
+        let clauses = parsed.allTerms.map { t -> String in
+            let e = esc(t)
+            return "(kMDItemTextContent == \"\(e)*\"cd || kMDItemDisplayName == \"*\(e)*\"cd || kMDItemTitle == \"*\(e)*\"cd || kMDItemAuthors == \"*\(e)*\"cd)"
+        }
+        var query = clauses.joined(separator: " && ")
+        if !parsed.detectedFileExtensions.isEmpty {
+            let exts = parsed.detectedFileExtensions.map { "kMDItemFSName == \"*.\(esc($0))\"c" }.joined(separator: " || ")
+            query += " && (\(exts))"
+        }
+        if let range = parsed.dateFilterRange {
+            let f = ISO8601DateFormatter()
+            let a = f.string(from: range.start), b = f.string(from: range.end)
+            query += " && ((kMDItemContentModificationDate >= $time.iso(\(a)) && kMDItemContentModificationDate <= $time.iso(\(b))) || (kMDItemDateAdded >= $time.iso(\(a)) && kMDItemDateAdded <= $time.iso(\(b))))"
+        }
+        return NSPredicate(fromMetadataQueryString: query)
+    }
+}
+
+private final class SpotlightRun: NSObject {
+    private let query = NSMetadataQuery()
+    private var finished = false
+    private var completion: (([SearchItem]) -> Void)?
+
+    func start(predicate: NSPredicate, completion: @escaping ([SearchItem]) -> Void) {
+        self.completion = completion
+        query.predicate = predicate
+        query.searchScopes = [NSMetadataQueryUserHomeScope]
+        NotificationCenter.default.addObserver(self, selector: #selector(done), name: .NSMetadataQueryDidFinishGathering, object: query)
+        query.start()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in self?.done() }
     }
 
-    @objc private func queryDidFinishGathering(_ notification: Notification) {
-        guard let query = notification.object as? NSMetadataQuery else { return }
+    @objc private func done() {
+        guard !finished else { return }
+        finished = true
         query.disableUpdates()
-        processQueryResults(query)
-        query.enableUpdates()
-    }
-
-    @objc private func queryDidUpdate(_ notification: Notification) {
-        guard let query = notification.object as? NSMetadataQuery else { return }
-        query.disableUpdates()
-        processQueryResults(query)
-        query.enableUpdates()
-    }
-
-    private func processQueryResults(_ query: NSMetadataQuery) {
+        query.stop()
+        NotificationCenter.default.removeObserver(self)
         var items: [SearchItem] = []
-        let count = min(query.resultCount, 80)
-
+        let count = min(query.resultCount, 300)
         for i in 0..<count {
-            guard let result = query.result(at: i) as? NSMetadataItem else { continue }
-
-            let path = result.value(forAttribute: kMDItemPath as String) as? String
-            let displayName = result.value(forAttribute: kMDItemDisplayName as String) as? String
-                ?? result.value(forAttribute: "kMDItemTitle") as? String
-                ?? (path != nil ? (path! as NSString).lastPathComponent : "Untitled")
-
-            let modDate = result.value(forAttribute: kMDItemContentModificationDate as String) as? Date ?? Date()
-            let contentType = result.value(forAttribute: kMDItemContentType as String) as? String ?? ""
-            let fsSize = (result.value(forAttribute: kMDItemFSSize as String) as? NSNumber)?.int64Value
-            let authors = result.value(forAttribute: kMDItemAuthors as String) as? [String]
-            let author = authors?.first
-
-            var fileURL: URL? = nil
-            if let path = path {
-                fileURL = URL(fileURLWithPath: path)
-            }
-
-            let isOutlook = contentType.contains("outlook") || (path?.contains("Outlook") == true) || (path?.hasSuffix(".olk15Message") == true)
-            let isAppleMail = contentType.contains("mail.emlx") || (path?.hasSuffix(".emlx") == true)
-            let isApp = contentType.contains("application") || (path?.hasSuffix(".app") == true)
-            let isNote = contentType.contains("notes.note")
-
-            let kind: SearchItemKind
-            if isApp {
-                kind = .application
-            } else if isNote {
-                kind = .note
-            } else if isOutlook || isAppleMail {
-                kind = .email
-            } else if let path = path, path.contains("/Downloads/") {
-                kind = .download
-            } else if contentType.contains("image") {
-                kind = .image
-            } else if contentType.contains("pdf") || contentType.contains("document") || contentType.contains("presentation") || contentType.contains("spreadsheet") {
-                kind = .document
-            } else {
-                kind = .other
-            }
-
-            let subtitle: String
-            if isApp {
-                subtitle = "Application • " + (path ?? "/Applications")
-            } else if isOutlook {
-                subtitle = "Outlook Message" + (author != nil ? " • From: \(author!)" : "")
-            } else if isAppleMail {
-                subtitle = "Apple Mail" + (author != nil ? " • From: \(author!)" : "")
-            } else if isNote {
-                subtitle = "Apple Notes"
-            } else if let path = path {
-                subtitle = (path as NSString).abbreviatingWithTildeInPath
-            } else {
-                subtitle = "Document"
-            }
-
-            let item = SearchItem(
-                id: path ?? UUID().uuidString,
-                title: displayName,
-                subtitle: subtitle,
-                fileURL: fileURL,
-                kind: kind,
-                modificationDate: modDate,
-                addedDate: nil,
-                fileSize: fsSize,
-                authorOrSender: author,
-                isOutlookItem: isOutlook,
-                matchSnippet: nil
-            )
-            items.append(item)
+            guard let mdItem = query.result(at: i) as? NSMetadataItem,
+                  let path = mdItem.value(forAttribute: kMDItemPath as String) as? String else { continue }
+            let url = URL(fileURLWithPath: path)
+            let type = (mdItem.value(forAttribute: kMDItemContentType as String) as? String) ?? ""
+            let isMail = type.contains("outlook") || type.contains("emlx") || type.contains("email")
+            let display = (mdItem.value(forAttribute: kMDItemTitle as String) as? String)
+                ?? (mdItem.value(forAttribute: kMDItemDisplayName as String) as? String) ?? url.lastPathComponent
+            let mod = (mdItem.value(forAttribute: kMDItemContentModificationDate as String) as? Date) ?? Date()
+            let added = mdItem.value(forAttribute: kMDItemDateAdded as String) as? Date
+            let authors = (mdItem.value(forAttribute: kMDItemAuthors as String) as? [String])?.joined(separator: ", ")
+            let ext = url.pathExtension.lowercased()
+            let kind: SearchItemKind = isMail ? .email
+                : KindClassifier.kind(ext: ext, name: url.lastPathComponent, isDirectory: false, isPackage: false, path: path)
+            items.append(SearchItem(
+                id: path, title: display,
+                subtitle: path.replacingOccurrences(of: NSHomeDirectory(), with: "~"),
+                fileURL: url, kind: kind, modificationDate: mod, addedDate: added,
+                fileSize: nil, authorOrSender: authors,
+                isOutlookItem: type.contains("outlook"), matchSnippet: nil, score: 0,
+                source: "spotlight", ref: "", isHidden: false
+            ))
         }
-
-        // Sort: newest first initially
-        items.sort { $0.modificationDate > $1.modificationDate }
-
-        let handler = completionHandler
-        DispatchQueue.main.async {
-            handler?(items)
-        }
+        let c = completion
+        completion = nil
+        c?(items)
     }
 }

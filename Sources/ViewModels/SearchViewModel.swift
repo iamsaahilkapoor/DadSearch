@@ -12,20 +12,26 @@ public final class SearchViewModel: ObservableObject {
     @Published public var isSearching: Bool = false
     @Published public var parsedQuery: ParsedQuery = ParsedQuery(rawQuery: "", cleanedTerms: [])
     @Published public var recentQueries: [String] = []
+    /// "Also showing results for …", "Indexing 12,400 files…" and similar one-line status.
+    @Published public var statusNote: String? = nil
+    /// Something that stops DadSearch from seeing part of the Mac (e.g. Full Disk Access missing).
+    @Published public var healthIssue: String? = nil
+    @AppStorage("com.saahil.DadSearch.includeHidden") public var includeHidden: Bool = true
 
     private var cancellables = Set<AnyCancellable>()
+    private var generation = 0            // every new search invalidates older in-flight ones
     private let queryParser = QueryParser.shared
-    private let indexDB = SearchIndexDatabase.shared
-    private let synonymRings = BusinessSynonymRings.shared
+    private let universal = UniversalSearch.shared
     private let appLauncher = AppLauncherEngine.shared
     private let contactsEngine = ContactsSearchEngine.shared
     private let calendarEngine = CalendarSearchEngine.shared
+    private let ranker = RelevanceRankingEngine.shared
     private let historyStore = SearchHistoryStore.shared
 
     public init() {
         setupBindings()
         refreshHistory()
-        bootstrapIndex()
+        startEngines()
         loadInitialRecents()
     }
 
@@ -33,198 +39,214 @@ public final class SearchViewModel: ObservableObject {
         self.recentQueries = historyStore.getRecentQueries(limit: 6)
     }
 
-    private func bootstrapIndex() {
-        // Start real-time file system watchers (FSEvents)
-        FSEventsService.shared.start()
-
-        // Bootstrap existing local files and Apple Mail into FTS5 index in background
-        Task.detached(priority: .utility) {
-            // 1. Initial crawl of Downloads
-            let downloadsURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
-            if let files = try? FileManager.default.contentsOfDirectory(at: downloadsURL, includingPropertiesForKeys: nil) {
-                for file in files.prefix(150) {
-                    await DocumentContentExtractor.shared.indexFile(at: file)
-                }
-            }
-
-            // 2. Initial crawl of Desktop screenshots & docs
-            let desktopURL = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first!
-            if let files = try? FileManager.default.contentsOfDirectory(at: desktopURL, includingPropertiesForKeys: nil) {
-                for file in files.prefix(60) {
-                    await DocumentContentExtractor.shared.indexFile(at: file)
-                }
-            }
-
-            // 3. Sync Apple Mail Envelope Index
-            AppleMailDatabaseReader.shared.syncAppleMailMessages(limit: 300)
-
-            // Update Coverage Health
-            Task { @MainActor in
-                CoverageHealthService.shared.checkHealth()
-            }
-        }
-    }
-
     private func setupBindings() {
         $rawQuery
-            .debounce(for: .milliseconds(150), scheduler: RunLoop.main)
+            .debounce(for: .milliseconds(120), scheduler: RunLoop.main)
             .removeDuplicates()
-            .sink { [weak self] newQuery in
-                self?.performSearch(query: newQuery)
-            }
+            .sink { [weak self] q in self?.performSearch(query: q) }
             .store(in: &cancellables)
 
         $selectedCategory
             .dropFirst()
-            .sink { [weak self] newCategory in
+            .sink { [weak self] c in
                 guard let self = self else { return }
-                self.performSearch(query: self.rawQuery, forcedCategory: newCategory)
+                self.performSearch(query: self.rawQuery, forcedCategory: c)
             }
             .store(in: &cancellables)
     }
 
-    public func loadInitialRecents() {
-        isSearching = true
+    // MARK: - Engines (index, watchers, connectors)
 
-        // 1. Fetch Arrival Radar (today's newly landed items)
-        let arrivals = indexDB.fetchTodayArrivals(limit: 30)
-        self.todayArrivals = arrivals
-
-        // 2. Fetch recent documents across categories
-        let recents = indexDB.fetchRecentDocuments(category: selectedCategory, limit: 30)
-        let apps = appLauncher.fetchApplications(limit: 6)
-
-        let merged = (arrivals + recents + apps).sorted {
-            ($0.addedDate ?? $0.modificationDate) > ($1.addedDate ?? $1.modificationDate)
+    private func startEngines() {
+        _ = IndexStore.shared
+        IndexCrawler.shared.onStatusChange = { [weak self] status in
+            Task { @MainActor in self?.crawlStatusChanged(status) }
         }
+        IndexCrawler.shared.startFullCrawl()
 
-        // Deduplicate by path / id
-        var seen = Set<String>()
-        var unique: [SearchItem] = []
-        for item in merged {
-            let key = item.fileURL?.path ?? item.id
-            if !seen.contains(key) {
-                seen.insert(key)
-                unique.append(item)
+        let home = NSHomeDirectory()
+        // Watcher 1: everything in the home folder except ~/Library (too noisy)
+        let files = FSEventsWatcher(paths: [home], exclusions: [home + "/Library"]) { paths in
+            IndexCrawler.shared.refresh(paths: paths)
+        }
+        files.start()
+        // Watcher 2: the specific Library folders that matter
+        var libPaths = CrawlRules.libraryAllowlist().map { $0.path }
+        let outlookDir = OutlookLegacyConnector.watchedDirectory
+        if FileManager.default.fileExists(atPath: outlookDir) { libPaths.append(outlookDir) }
+        let mailRoots = AppleMailIndexer.mailRoots.map { $0.path }
+        libPaths.append(contentsOf: mailRoots)
+        let library = FSEventsWatcher(paths: libPaths) { paths in
+            if paths.contains(where: { $0.hasPrefix(OutlookLegacyConnector.watchedDirectory) }) {
+                OutlookLegacyConnector.shared.scheduleSync()
+            }
+            if paths.contains(where: { p in mailRoots.contains { p.hasPrefix($0) } }) {
+                AppleMailIndexer.shared.scheduleSync()
+            }
+            IndexCrawler.shared.refresh(paths: paths)
+        }
+        library.start()
+        self.watchers = [files, library]
+
+        DispatchQueue.global(qos: .utility).async {
+            OutlookLegacyConnector.shared.sync()
+            AppleMailIndexer.shared.sync()
+            Task { @MainActor in self.refreshHealth() }
+        }
+        refreshHealth()
+    }
+
+    private var watchers: [FSEventsWatcher] = []
+
+    private func crawlStatusChanged(_ status: CrawlStatus) {
+        if status.running {
+            statusNote = "Building your search index… \(status.itemsSeen.formatted()) items so far (search already works)"
+        } else if statusNote?.hasPrefix("Building") == true {
+            statusNote = nil
+            performSearch(query: rawQuery, forcedCategory: selectedCategory)
+        }
+        refreshHealth()
+    }
+
+    public func refreshHealth() {
+        var issue: String? = nil
+        if !Permissions.hasFullDiskAccess() {
+            issue = "DadSearch can't see your email, messages and some folders yet. Tap to fix (Full Disk Access)."
+        } else {
+            let r = OutlookLegacyConnector.shared.lastReport
+            if r.installed && r.profileFound && !r.databaseReadable {
+                issue = "Outlook mail couldn't be read: \(r.note)"
             }
         }
-
-        self.results = unique
-        self.selectedItem = unique.first
-        self.isSearching = false
+        healthIssue = issue
     }
 
-    public func performSearch(query: String, forcedCategory: SearchCategoryFilter? = nil) {
-        let parsed = queryParser.parse(query: query)
-        self.parsedQuery = parsed
-        let category = forcedCategory ?? parsed.inferredCategory ?? self.selectedCategory
+    public func fixHealthIssue() { Permissions.openFullDiskAccessSettings() }
 
-        // If query is empty and category is all, load initial recents & radar
-        if parsed.rawQuery.isEmpty && category == .all {
-            loadInitialRecents()
-            return
+    public func rescanEverything() {
+        IndexCrawler.shared.startFullCrawl(force: true)
+        DispatchQueue.global(qos: .utility).async {
+            OutlookLegacyConnector.shared.sync()
+            AppleMailIndexer.shared.sync()
         }
-
-        self.isSearching = true
-
-        // Record history for substantive queries
-        if !parsed.searchTerm.isEmpty {
-            historyStore.recordQuery(query)
-            refreshHistory()
-        }
-
-        // Fast path: Apps only
-        if category == .apps {
-            let apps = appLauncher.fetchApplications(keyword: parsed.searchTerm, limit: 40)
-            self.results = apps
-            self.selectedItem = apps.first
-            self.isSearching = false
-            return
-        }
-
-        // Fast path: Contacts & Calendar
-        if category == .contacts {
-            let contacts = contactsEngine.searchContacts(keyword: parsed.searchTerm, limit: 15)
-            let events = calendarEngine.searchEvents(keyword: parsed.searchTerm, limit: 15)
-            let merged = contacts + events
-            self.results = merged
-            self.selectedItem = merged.first
-            self.isSearching = false
-            return
-        }
-
-        // 1. Expand search term with Business Synonym Rings (e.g. "invoice" -> "bill", "statement", "po")
-        let synonyms = synonymRings.expandQuery(parsed.searchTerm)
-        let effectiveQuery = (synonyms.isEmpty ? parsed.searchTerm : synonyms.joined(separator: " ")).trimmingCharacters(in: .whitespaces)
-
-        // 2. Execute Sub-millisecond SQLite FTS5 Trigram query (zero caps, true multi-word matching!)
-        var ftsResults = indexDB.search(query: effectiveQuery.isEmpty ? parsed.searchTerm : effectiveQuery, category: category, limit: 100)
-
-        // 3. Date filtering if natural date detected (NSDataDetector)
-        if let dateInterval = parsed.dateFilterRange {
-            ftsResults = ftsResults.filter { item in
-                let targetDate = item.addedDate ?? item.modificationDate
-                return dateInterval.contains(targetDate)
-            }
-        }
-
-        // 4. Augment with active Apps / Contacts if in "All" mode
-        var supplementary: [SearchItem] = []
-        if category == .all && !parsed.searchTerm.isEmpty {
-            let matchedApps = appLauncher.fetchApplications(keyword: parsed.searchTerm, limit: 4)
-            supplementary.append(contentsOf: matchedApps)
-
-            let contacts = contactsEngine.searchContacts(keyword: parsed.searchTerm, limit: 3)
-            supplementary.append(contentsOf: contacts)
-
-            let events = calendarEngine.searchEvents(keyword: parsed.searchTerm, limit: 3)
-            supplementary.append(contentsOf: events)
-        }
-
-        // Deduplicate and rank
-        var seen = Set<String>()
-        var finalItems: [SearchItem] = []
-
-        for item in (supplementary + ftsResults) {
-            let key = item.fileURL?.path ?? item.id
-            if !seen.contains(key) {
-                seen.insert(key)
-                finalItems.append(item)
-            }
-        }
-
-        self.results = finalItems
-        if self.selectedItem == nil || !finalItems.contains(where: { $0.id == self.selectedItem?.id }) {
-            self.selectedItem = finalItems.first
-        }
-        self.isSearching = false
     }
 
-    public func selectNext() {
-        guard !results.isEmpty else { return }
-        guard let current = selectedItem, let idx = results.firstIndex(of: current) else {
-            selectedItem = results.first
-            return
-        }
-        let nextIdx = min(idx + 1, results.count - 1)
-        selectedItem = results[nextIdx]
-    }
-
-    public func selectPrevious() {
-        guard !results.isEmpty else { return }
-        guard let current = selectedItem, let idx = results.firstIndex(of: current) else {
-            selectedItem = results.first
-            return
-        }
-        let prevIdx = max(idx - 1, 0)
-        selectedItem = results[prevIdx]
-    }
+    // MARK: - Actions
 
     public func handleItemOpened(_ item: SearchItem) {
         QuickActionService.shared.open(item: item)
-        // Record learned alias for this query and item
-        if !rawQuery.isEmpty {
-            indexDB.recordAlias(query: rawQuery, forId: item.id)
+    }
+
+    // MARK: - Home screen
+
+    public func loadInitialRecents() {
+        performSearch(query: "")
+    }
+
+    // MARK: - Searching
+
+    public func performSearch(query: String, forcedCategory: SearchCategoryFilter? = nil) {
+        generation += 1
+        let gen = generation
+        let category = forcedCategory ?? selectedCategory
+        let parsed = queryParser.parse(query: query)
+        self.parsedQuery = parsed
+        let hidden = includeHidden
+        isSearching = true
+
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            let universalRef = universal
+            let launcherRef = appLauncher
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                var items = universalRef.browse(includeHidden: hidden, limit: 30)
+                if category == .apps { items = launcherRef.fetchApplications(limit: 30) }
+                Task { @MainActor [weak self] in
+                    guard let self = self, gen == self.generation else { return }
+                    self.todayArrivals = items
+                    self.apply(items: items, note: nil, select: true)
+                    self.isSearching = false
+                }
+            }
+            return
+        }
+        if trimmed.count >= 2 { historyStore.recordQuery(trimmed) }
+
+        let wantsIndex = ![.apps, .contacts].contains(category)
+        let engine = SpotlightSearchEngine.shared
+        let universalRef = universal
+        let launcherRef = appLauncher
+        let contactsRef = contactsEngine
+        let calendarRef = calendarEngine
+        let rankerRef = ranker
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var extras: [SearchItem] = []
+            let frec = SearchHistoryStore.shared.frecencySnapshot()
+            let term = parsed.searchTerm
+
+            if category == .apps || category == .all || parsed.wantsApps {
+                extras += launcherRef.fetchApplications(keyword: term, limit: 8)
+            }
+            if category == .contacts || parsed.wantsContacts || parsed.wantsCalendar || (category == .all && !term.isEmpty) {
+                extras += contactsRef.searchContacts(keyword: term, limit: category == .contacts ? 15 : 3)
+                extras += calendarRef.searchEvents(keyword: term, limit: category == .contacts ? 15 : 3)
+            }
+            extras = extras.map { var i = $0; i.score = rankerRef.score(item: $0, bm25: 0, parsed: parsed, tier: 0, frecency: frec); return i }
+
+            var outcome = SearchOutcome()
+            if wantsIndex {
+                outcome = universalRef.search(parsed: parsed, category: category, includeHidden: hidden)
+            }
+            let first = Self.merge(outcome.items, extras)
+            let note = outcome.note
+            Task { @MainActor [weak self] in
+                guard let self = self, gen == self.generation else { return }
+                self.apply(items: first, note: note, select: true)
+                self.isSearching = wantsIndex   // Spotlight supplement may still add results
+            }
+            guard wantsIndex, category != .folders else {
+                Task { @MainActor [weak self] in
+                    guard let self = self, gen == self.generation else { return }
+                    self.isSearching = false
+                }
+                return
+            }
+
+            // Supplement: Spotlight (email bodies, documents not yet extracted). Merged when it returns.
+            engine.search(parsed: parsed) { [weak self] spot in
+                let have = Set(first.compactMap { $0.fileURL?.path })
+                let fresh = spot.filter { !have.contains($0.fileURL?.path ?? "") }.map { item -> SearchItem in
+                    var i = item
+                    i.score = rankerRef.score(item: item, bm25: 0, parsed: parsed, tier: 1, frecency: frec)
+                    return i
+                }
+                Task { @MainActor [weak self] in
+                    guard let self = self, gen == self.generation else { return }
+                    if !fresh.isEmpty { self.apply(items: Self.merge(first, fresh), note: note, select: false) }
+                    self.isSearching = false
+                }
+            }
+        }
+    }
+
+    nonisolated private static func merge(_ a: [SearchItem], _ b: [SearchItem]) -> [SearchItem] {
+        var seen = Set<String>()
+        var out: [SearchItem] = []
+        for i in (a + b).sorted(by: { $0.score != $1.score ? $0.score > $1.score : $0.modificationDate > $1.modificationDate }) {
+            if seen.insert(i.id).inserted { out.append(i) }
+        }
+        return Array(out.prefix(100))
+    }
+
+    private func apply(items: [SearchItem], note: String?, select: Bool) {
+        let previous = selectedItem?.id
+        results = items
+        if statusNote == nil || statusNote?.hasPrefix("Building") == false { statusNote = note }
+        if !select, let p = previous, let keep = items.first(where: { $0.id == p }) {
+            selectedItem = keep
+        } else {
+            selectedItem = items.first
         }
     }
 }
